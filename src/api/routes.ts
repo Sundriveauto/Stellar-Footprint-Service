@@ -1,18 +1,52 @@
 import { Router } from "express";
-import { simulate, footprintDiffController, validate, cacheStats } from "./controllers";
+
+import {
+  health,
+  simulate,
+  simulateBatch,
+  footprintDiffController,
+  validate,
+  networkStatus,
+  decode,
+  restore,
+  invalidateCache,
+  estimateFeeController,
+} from "./controllers";
+import { simulateRateLimiter } from "../middleware/rateLimiter";
 
 const router = Router();
 
+// GET /health — liveness check for load balancers and uptime monitors
+router.get("/health", health);
+
 // POST /simulate — accepts { xdr, network } and returns footprint + cost
-router.post("/simulate", simulate);
+router.post("/simulate", simulateRateLimiter, simulate);
 
-// GET /simulate/cache-stats — returns idempotency cache statistics (#418)
-router.get("/simulate/cache-stats", cacheStats);
+// POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
+router.post("/simulate/batch", simulateBatch);
 
-// POST /footprint/diff — accepts { before, after } and returns added/removed ledger keys
+// POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
+router.post("/simulate/batch", simulateBatch);
+
+// GET /network/status — returns current network information
+router.get("/network/status", networkStatus);
+
+// POST /footprint/diff — compares two footprints and returns differences
 router.post("/footprint/diff", footprintDiffController);
 
-// POST /validate — accepts { xdr, type } and returns parse result without simulating
+// POST /validate — validates transaction XDR without simulating
 router.post("/validate", validate);
+
+// GET /decode — accepts ?xdr=&type= and returns human-readable JSON of the XDR
+router.get("/decode", decode);
+
+// POST /restore — returns a restoration transaction if the transaction requires it
+router.post("/restore", restore);
+
+// POST /estimate-fee — accepts { cpuInsns, memBytes, network } and returns fee breakdown
+router.post("/estimate-fee", estimateFeeController);
+
+// DELETE /cache — flush all cache entries (Redis or in-memory)
+router.delete("/cache", invalidateCache);
 
 export default router;

@@ -1,5 +1,5 @@
-import client from "prom-client";
 import { Request, Response, NextFunction } from "express";
+import client from "prom-client";
 
 // Create a Registry to register the metrics
 const register = new client.Registry();
@@ -26,6 +26,28 @@ const httpRequestDuration = new client.Histogram({
   registers: [register],
 });
 
+const simulateRequestsTotal = new client.Counter({
+  name: "simulate_requests_total",
+  help: "Total number of Stellar simulations",
+  labelNames: ["network", "status"],
+  registers: [register],
+});
+
+const simulateDurationSeconds = new client.Histogram({
+  name: "simulate_duration_seconds",
+  help: "Duration of Stellar simulations in seconds",
+  labelNames: ["network"],
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
+  registers: [register],
+});
+
+const rpcErrorsTotal = new client.Counter({
+  name: "rpc_errors_total",
+  help: "Total number of RPC errors",
+  labelNames: ["network", "error_type"],
+  registers: [register],
+});
+
 // Cache metrics
 const cacheHitsTotal = new client.Counter({
   name: "cache_hits_total",
@@ -41,14 +63,7 @@ const cacheMissesTotal = new client.Counter({
   registers: [register],
 });
 
-// Stellar-specific metrics
-const stellarSimulationsTotal = new client.Counter({
-  name: "stellar_simulations_total",
-  help: "Total number of Stellar simulations",
-  labelNames: ["network", "success"],
-  registers: [register],
-});
-
+// Tracking active simulations
 const activeSimulations = new client.Gauge({
   name: "active_simulations",
   help: "Number of currently active simulations",
@@ -96,7 +111,6 @@ export function metricsMiddleware(
 
 // Metrics tracking functions
 export const metrics = {
-  // Cache metrics
   recordCacheHit: (cacheType: string = "simulation") => {
     cacheHitsTotal.inc({ cache_type: cacheType });
   },
@@ -105,15 +119,21 @@ export const metrics = {
     cacheMissesTotal.inc({ cache_type: cacheType });
   },
 
-  // Stellar simulation metrics
   recordSimulation: (network: string, success: boolean) => {
-    stellarSimulationsTotal.inc({
+    simulateRequestsTotal.inc({
       network,
-      success: success.toString(),
+      status: success ? "success" : "failure",
     });
   },
 
-  // Active simulations
+  recordSimulationDuration: (network: string, durationInSeconds: number) => {
+    simulateDurationSeconds.observe({ network }, durationInSeconds);
+  },
+
+  recordRpcError: (network: string, errorType: string) => {
+    rpcErrorsTotal.inc({ network, error_type: errorType });
+  },
+
   incrementActiveSimulations: () => {
     activeSimulations.inc();
   },
@@ -122,19 +142,10 @@ export const metrics = {
     activeSimulations.dec();
   },
 
-  // Footprint entry counts (#423)
-  recordFootprintEntries: (readOnly: number, readWrite: number) => {
-    footprintEntriesHistogram.observe({ type: "read_only" }, readOnly);
-    footprintEntriesHistogram.observe({ type: "read_write" }, readWrite);
-    footprintEntriesHistogram.observe({ type: "total" }, readOnly + readWrite);
-  },
-
-  // Get current metrics
   getMetrics: async (): Promise<string> => {
     return await register.metrics();
   },
 
-  // Get register for custom metrics
   getRegister: () => register,
 };
 

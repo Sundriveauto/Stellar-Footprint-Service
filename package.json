@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "description": "Stellar transaction footprint simulation service",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "start": "node -r tsconfig-paths/register dist/index.js",
+    "dev": "ts-node -r tsconfig-paths/register src/index.ts",
     "pm2:start": "pm2 start ecosystem.config.js --env production",
     "pm2:start:staging": "pm2 start ecosystem.config.js --env staging",
     "pm2:stop": "pm2 stop stellar-footprint-service",
@@ -18,33 +21,64 @@
     "solhint": "solhint 'contracts/**/*.sol'",
     "test": "jest",
     "test:coverage": "jest --coverage",
-    "prepare": "husky"
+    "prepare": "husky",
+    "load-test": "node scripts/load-test.js"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^12.0.0",
+    "@stellar/stellar-sdk": "^15.0.1",
     "compression": "^1.8.1",
+    "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "prom-client": "^15.1.0"
+    "express-rate-limit": "^8.4.0",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.10.1",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "prom-client": "^15.1.0",
+    "swagger-ui-express": "^5.0.1",
+    "tsconfig-paths": "^4.2.0",
+    "uuid": "^9.0.1",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@commitlint/cli": "^19.0.0",
+    "@commitlint/config-conventional": "^19.0.0",
     "@types/compression": "^1.8.1",
+    "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.6.0",
+    "@types/supertest": "^6.0.0",
+    "@types/swagger-ui-express": "^4.1.8",
+    "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^8.58.2",
     "@typescript-eslint/parser": "^8.59.0",
+    "autocannon": "^8.0.0",
     "eslint": "^10.2.1",
     "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import-x": "^4.16.2",
     "eslint-plugin-prettier": "^5.5.5",
     "husky": "^9.1.7",
     "jest": "^30.3.0",
+    "lint-staged": "16.4.0",
     "prettier": "^3.8.3",
     "solhint": "^6.2.1",
+    "supertest": "^7.0.0",
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
     "validate-branch-name": "^1.3.2"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{js,jsx,json,md}": [
+      "prettier --write"
+    ]
   },
   "validate-branch-name": {
     "pattern": "^(main|develop|live)$|^(feature|fix|refactor|hotfix|release|conflict|chore)/.+$",

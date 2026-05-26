@@ -1,5 +1,10 @@
 # 🚀 Stellar Footprint Service
 
+[![CI](https://github.com/josunday002/Stellar-Footprint-Service/actions/workflows/ci.yml/badge.svg)](https://github.com/josunday002/Stellar-Footprint-Service/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/josunday002/Stellar-Footprint-Service/branch/main/graph/badge.svg)](https://codecov.io/gh/josunday002/Stellar-Footprint-Service)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
+
 **Pre-flight Simulation & Developer Experience (DX) for Soroban Smart Contracts**
 
 A backend service that automates the complex footprint extraction process for Stellar/Soroban transactions, acting as a middleman between your frontend and the Stellar RPC network.
@@ -32,24 +37,53 @@ This service centralizes the "pre-flight" heavy lifting:
 
 ## 🏗️ Architecture
 
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Service as Footprint Service
+    participant Cache as Redis Cache
+    participant RPC as Stellar RPC
+
+    Client->>Service: POST /api/simulate { xdr, network }
+
+    Service->>Service: Validate request (XDR present, content-type)
+    alt Validation fails
+        Service-->>Client: 400 Bad Request
+    end
+
+    Service->>Cache: GET cache key (hash of xdr + network)
+    alt Cache hit
+        Cache-->>Service: Cached result
+        Service-->>Client: 200 OK (footprint + cost) [from cache]
+    else Cache miss
+        Service->>RPC: simulateTransaction(tx)
+
+        alt RPC circuit breaker open
+            Service-->>Client: 503 Service Unavailable
+        else RPC error
+            RPC-->>Service: Simulation error
+            Service-->>Client: 422 Unprocessable Entity { error }
+        else Restoration required
+            RPC-->>Service: RestoreFootprint response
+            Service-->>Client: 422 Unprocessable Entity { error: "restoration required" }
+        else Success
+            RPC-->>Service: Simulation result (footprint + cost)
+            Service->>Service: Extract & optimize footprint
+            Service->>Cache: SET cache key → result (TTL)
+            Service-->>Client: 200 OK { footprint, cost }
+        end
+    end
 ```
-┌─────────────┐         ┌──────────────────────┐         ┌─────────────────┐
-│   Frontend  │────────▶│  Footprint Service   │────────▶│  Stellar RPC    │
-│  (React/JS) │  XDR    │  (This Service)      │  Sim    │  (Testnet/Main) │
-└─────────────┘         └──────────────────────┘         └─────────────────┘
-                                  │
-                                  ▼
-                        ┌──────────────────────┐
-                        │  Optimized Footprint │
-                        │  + Resource Costs    │
-                        └──────────────────────┘
-```
+
+For a detailed explanation of each component and design decisions, see [docs/architecture.md](./docs/architecture.md).
 
 ---
 
 ## 📦 Installation
 
 ### Quick Start
+
+> **Prerequisites:** Node.js >= 18.0.0. Use [nvm](https://github.com/nvm-sh/nvm) and run `nvm use` to automatically switch to the correct version.
 
 ```bash
 # Clone the repository
@@ -62,6 +96,51 @@ npm install
 # Configure environment
 cp .env.example .env
 # Edit .env with your RPC URLs and keys
+```
+
+## Load Testing
+
+To benchmark the service under concurrent load:
+
+1. Start the local server:
+   ```bash
+   npm run dev
+   ```
+2. Run the autocannon load test:
+   ```bash
+   npm run load-test
+   ```
+
+### What is tested
+
+This load test runs three concurrency levels against the service:
+
+- `10` connections
+- `50` connections
+- `100` connections
+
+### Metrics explained
+
+- `p50`: median latency, meaning half of requests completed faster than this value.
+- `p95`: latency at the 95th percentile, showing how slow the slowest 5% of requests are.
+- `p99`: latency at the 99th percentile, showing the tail latency for the slowest 1% of requests.
+- `Req/sec`: average number of successful requests per second.
+- `Errors(%)`: percentage of requests that failed, timed out, or returned non-2xx responses.
+
+### How to interpret results
+
+- Lower `p50`, `p95`, and `p99` values indicate better request latency.
+- A small gap between `p95` and `p99` suggests a stable service under load.
+- A low `Errors(%)` means the service handled the traffic reliably.
+
+### Customize the target
+
+By default, the load test targets the health endpoint at `http://localhost:3000/health`.
+
+You can override the base URL using `LOAD_TEST_URL` or change the path via `LOAD_TEST_PATH`:
+
+```bash
+LOAD_TEST_URL=http://localhost:3000 LOAD_TEST_PATH=/metrics npm run load-test
 ```
 
 ### Scaffold from Scratch
@@ -342,24 +421,47 @@ Your service will be running at `http://localhost:3000`!
 
 Create a `.env` file in the root directory:
 
-```env
-# Stellar Network RPC URLs
-MAINNET_RPC_URL=https://mainnet.stellar.validationcloud.io/v1/<YOUR_API_KEY>
-TESTNET_RPC_URL=https://soroban-testnet.stellar.org
-
-# Secret Keys (for signing, if needed — never commit real keys)
-MAINNET_SECRET_KEY=your_mainnet_secret_key_here
-TESTNET_SECRET_KEY=your_testnet_secret_key_here
-
-# App Configuration
-PORT=3000
-NETWORK=testnet
+```bash
+cp .env.example .env
 ```
 
 ### Getting RPC URLs
 
 - **Testnet (Free):** `https://soroban-testnet.stellar.org`
 - **Mainnet:** Get an API key from [Validation Cloud](https://validationcloud.io/) or [Infstones](https://infstones.com/)
+
+---
+
+## 🔧 Environment Variables
+
+| Variable                      | Description                                                                  | Required        | Default                               | Example                                               |
+| ----------------------------- | ---------------------------------------------------------------------------- | --------------- | ------------------------------------- | ----------------------------------------------------- |
+| `NODE_ENV`                    | Runtime environment                                                          | ✅              | —                                     | `production`                                          |
+| `PORT`                        | Port the HTTP server listens on                                              | ✅              | `3000`                                | `3000`                                                |
+| `TESTNET_RPC_URL`             | Stellar testnet Soroban RPC endpoint                                         | ✅              | `https://soroban-testnet.stellar.org` | `https://soroban-testnet.stellar.org`                 |
+| `MAINNET_RPC_URL`             | Stellar mainnet Soroban RPC endpoint                                         | ⚠️ mainnet only | —                                     | `https://mainnet.stellar.validationcloud.io/v1/<KEY>` |
+| `TESTNET_SECRET_KEY`          | Stellar secret key for testnet signing                                       | ⚠️ if signing   | —                                     | `SXXXXX...`                                           |
+| `MAINNET_SECRET_KEY`          | Stellar secret key for mainnet signing                                       | ⚠️ if signing   | —                                     | `SXXXXX...`                                           |
+| `NETWORK`                     | Default network when none is specified in request                            | ❌              | `testnet`                             | `mainnet`                                             |
+| `SIMULATE_TIMEOUT_MS`         | Timeout for simulation requests in milliseconds                              | ❌              | `30000`                               | `15000`                                               |
+| `LOG_LEVEL`                   | Logging verbosity (`debug` \| `info` \| `warn` \| `error`)                   | ❌              | `info`                                | `debug`                                               |
+| `COMPRESSION_THRESHOLD`       | Minimum response size in bytes before gzip compression is applied            | ❌              | `1024`                                | `512`                                                 |
+| `RPC_POOL_TTL_MS`             | How long an RPC server connection is reused before being recreated (ms)      | ❌              | `300000`                              | `60000`                                               |
+| `IP_ALLOWLIST`                | Comma-separated list of allowed IPs/CIDRs. If set, all other IPs are blocked | ❌              | —                                     | `192.168.1.0/24,10.0.0.1`                             |
+| `IP_BLOCKLIST`                | Comma-separated list of blocked IPs/CIDRs                                    | ❌              | —                                     | `1.2.3.4,5.6.7.0/24`                                  |
+| `BRUTE_FORCE_DELAY_THRESHOLD` | Number of requests from one IP before responses are delayed                  | ❌              | `10`                                  | `5`                                                   |
+| `BRUTE_FORCE_BLOCK_THRESHOLD` | Number of requests from one IP before the IP is blocked                      | ❌              | `20`                                  | `15`                                                  |
+| `BRUTE_FORCE_WINDOW_MS`       | Rolling time window for brute-force counting (ms)                            | ❌              | `60000`                               | `30000`                                               |
+| `BRUTE_FORCE_DELAY_MS`        | Delay added to responses once delay threshold is hit (ms)                    | ❌              | `5000`                                | `2000`                                                |
+| `BRUTE_FORCE_BLOCK_MS`        | Duration an IP remains blocked (ms)                                          | ❌              | `300000`                              | `600000`                                              |
+| `CB_FAILURE_THRESHOLD`        | Number of RPC failures before the circuit breaker opens                      | ❌              | `5`                                   | `3`                                                   |
+| `CB_RECOVERY_MS`              | Time the circuit breaker waits before attempting recovery (ms)               | ❌              | `30000`                               | `15000`                                               |
+| `GRAFANA_USER`                | Grafana admin username (Docker Compose only)                                 | ❌              | `admin`                               | `admin`                                               |
+| `GRAFANA_PASSWORD`            | Grafana admin password (Docker Compose only)                                 | ❌              | `admin`                               | `s3cur3pass`                                          |
+| `REDIS_HOST`                  | Redis hostname for caching (Docker Compose only)                             | ❌              | `redis`                               | `localhost`                                           |
+| `REDIS_PORT`                  | Redis port (Docker Compose only)                                             | ❌              | `6379`                                | `6379`                                                |
+
+> ⚠️ = conditionally required. Never commit real secret keys — use your platform's secrets manager in production.
 
 ---
 
@@ -386,7 +488,6 @@ The service will start on `http://localhost:3000` (or your configured `PORT`).
 
 You can also test the API using the [Postman collection](./docs/postman/stellar-footprint-service.postman_collection.json). Import this collection into Postman to get started quickly.
 
-
 You can also test the API using the [Postman collection](./docs/postman/stellar-footprint-service.postman_collection.json). Import this collection into Postman to get started quickly.
 
 ### `POST /api/simulate`
@@ -403,10 +504,15 @@ Simulate a Soroban transaction and extract its footprint.
 }
 ```
 
-| Field             | Type   | Required | Description                                                                 |
-| ----------------- | ------ | -------- | --------------------------------------------------------------------------- |
-| `xdr`             | string | ✅       | Base64-encoded transaction XDR                                              |
-| `network`         | string | ❌       | `"testnet"` or `"mainnet"` (default: `"testnet"`)                           |
+| Field             | Type   | Required | Description                                                                                                       |
+| ----------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `xdr`             | string | ✅       | Base64-encoded transaction XDR                                                                                    |
+| `network`         | string | ❌       | `"testnet"` or `"mainnet"` (default: `"testnet"`)                                                                 |
+| `ledgerSequence`  | number | ❌       | Specific ledger sequence to simulate against. Useful for reproducing historical simulation results and debugging. |
+| Field             | Type   | Required | Description                                                                                                       |
+| ----------------- | ------ | -------- | ---------------------------------------------------------------------------                                       |
+| `xdr`             | string | ✅       | Base64-encoded transaction XDR                                                                                    |
+| `network`         | string | ❌       | `"testnet"` or `"mainnet"` (default: `"testnet"`)                                                                 |
 | `ledgerSequence`  | number | ❌       | Specific ledger sequence to simulate against. Useful for reproducing historical simulation results and debugging. |
 
 #### Success Response (200)
@@ -773,6 +879,8 @@ await server.sendTransaction(finalTx);
 - **Rate limit** the `/api/simulate` endpoint
 - **Sanitize errors** to avoid leaking internal details
 
+To report a security vulnerability, please follow our [Security Policy](./SECURITY.md). Do not open a public issue.
+
 ---
 
 ## 🐛 Troubleshooting
@@ -804,24 +912,32 @@ await server.sendTransaction(finalTx);
 
 ---
 
+## 📋 Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for a full history of changes.
+
+---
+
 ## 🤝 Contributing
 
-Contributions are welcome! Check out [ISSUES.md](ISSUES.md) for 150+ ideas.
+Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide covering fork/clone setup, local development, code style, commit format, PR process, and issue labels.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Check out [ISSUES.md](ISSUES.md) for 150+ ideas on where to start.
 
-### Dependency Management
+---
 
-This project uses exact versions for all dependencies to ensure reproducible builds. When updating dependencies:
+## 🚢 Deployment
 
-1. Update the exact version in `package.json`
-2. Run `npm install` to update `package-lock.json`
-3. Commit both files together
-4. Test that the service builds and runs correctly
+Step-by-step guides for deploying to common platforms:
+
+| Platform       | Guide                                                                              |
+| -------------- | ---------------------------------------------------------------------------------- |
+| Railway        | [docs/deployment.md#1-railway](./docs/deployment.md#1-railway)                     |
+| Render         | [docs/deployment.md#2-render](./docs/deployment.md#2-render)                       |
+| Fly.io         | [docs/deployment.md#3-flyio](./docs/deployment.md#3-flyio)                         |
+| Bare VPS + PM2 | [docs/deployment.md#4-bare-vps-with-pm2](./docs/deployment.md#4-bare-vps-with-pm2) |
+
+See the full [Deployment Guide](./docs/deployment.md) for environment variable reference and health check configuration.
 
 ---
 
@@ -832,7 +948,7 @@ This project uses exact versions for all dependencies to ensure reproducible bui
 - [ ] Add Prometheus metrics
 - [ ] Support Futurenet
 - [ ] Build OpenAPI/Swagger docs
-- [ ] Add Docker deployment guide
+- [x] Add deployment guide
 
 See [ISSUES.md](ISSUES.md) for the full list.
 
