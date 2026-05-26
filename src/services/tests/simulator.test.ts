@@ -231,4 +231,27 @@ describe("simulateTransaction", () => {
       simulateTransaction(INVALID_BASE64_XDR, "testnet"),
     ).rejects.toThrow("invalid base64");
   });
+
+  it("upgrades v0 envelope to v1 and sets upgradedFromV0: true", async () => {
+    const { TransactionBuilder } = jest.requireMock("@stellar/stellar-sdk");
+    const cloneFromBuild = jest.fn().mockReturnValue({
+      operations: [{ type: "invokeHostFunction" }],
+      envelopeType: jest.fn().mockReturnValue({ name: "envelopeTypeTx" }),
+    });
+    const cloneFromResult = { build: cloneFromBuild };
+    TransactionBuilder.cloneFrom = jest.fn().mockReturnValue(cloneFromResult);
+
+    // Make fromXDR return a v0 transaction
+    TransactionBuilder.fromXDR.mockReturnValueOnce({
+      operations: [{ type: "invokeHostFunction" }],
+      envelopeType: jest.fn().mockReturnValue({ name: "envelopeTypeTxV0" }),
+    });
+
+    mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
+
+    const result = await simulateTransaction(INVALID_XDR_BYTES, "testnet");
+
+    expect(TransactionBuilder.cloneFrom).toHaveBeenCalled();
+    expect(result.upgradedFromV0).toBe(true);
+  });
 });

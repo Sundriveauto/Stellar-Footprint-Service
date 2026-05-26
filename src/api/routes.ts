@@ -11,6 +11,7 @@ import {
   restore,
   invalidateCache,
   estimateFeeController,
+  openApiSpec,
 } from "./controllers";
 import { simulateRateLimiter } from "../middleware/rateLimiter";
 
@@ -48,5 +49,8 @@ router.post("/estimate-fee", estimateFeeController);
 
 // DELETE /cache — flush all cache entries (Redis or in-memory)
 router.delete("/cache", invalidateCache);
+
+// GET /openapi.json — serve raw OpenAPI spec as JSON
+router.get("/openapi.json", openApiSpec);
 
 export default router;

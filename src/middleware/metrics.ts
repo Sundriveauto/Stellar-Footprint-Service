@@ -70,6 +70,14 @@ const activeSimulations = new client.Gauge({
   registers: [register],
 });
 
+// XDR payload size histogram
+const simulateRequestXdrBytes = new client.Histogram({
+  name: "simulate_request_xdr_bytes",
+  help: "Distribution of simulate request XDR payload sizes in bytes (after base64 decode)",
+  buckets: [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536],
+  registers: [register],
+});
+
 // Middleware to track HTTP metrics
 export function metricsMiddleware(
   req: Request,
@@ -131,6 +139,10 @@ export const metrics = {
 
   decrementActiveSimulations: () => {
     activeSimulations.dec();
+  },
+
+  recordXdrBytes: (bytes: number) => {
+    simulateRequestXdrBytes.observe(bytes);
   },
 
   getMetrics: async (): Promise<string> => {

@@ -1,3 +1,6 @@
+import fs from "fs";
+import path from "path";
+
 import { Network } from "@config/stellar";
 import metrics from "@middleware/metrics";
 import { getCache } from "@services/cache";
@@ -18,6 +21,40 @@ import {
   BATCH_MAX_SIZE,
 } from "../constants";
 import { ResponseEnvelope } from "../types";
+
+// Parse openapi.yaml once on startup
+let _openapiSpec: Record<string, unknown> | null = null;
+function getOpenapiSpec(): Record<string, unknown> | null {
+  if (_openapiSpec !== null) return _openapiSpec;
+  try {
+    const YAML = require("yaml") as { parse: (s: string) => unknown };
+    const specPath = path.join(__dirname, "..", "..", "openapi.yaml");
+    _openapiSpec = YAML.parse(fs.readFileSync(specPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+  } catch {
+    _openapiSpec = null;
+  }
+  return _openapiSpec;
+}
+
+export function openApiSpec(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const spec = getOpenapiSpec();
+  if (!spec) {
+    return next(
+      new AppError(
+        "OpenAPI spec not available",
+        HTTP_STATUS.INTERNAL_SERVER_ERROR,
+      ),
+    );
+  }
+  res.status(HTTP_STATUS.OK).json(spec);
+}
 
 export function health(_req: Request, res: Response): void {
   res.status(HTTP_STATUS.OK).json({
@@ -66,6 +103,13 @@ export async function simulate(
 
   metrics.incrementActiveSimulations();
   const start = Date.now();
+
+  // Record XDR payload size (decoded byte length)
+  try {
+    metrics.recordXdrBytes(Buffer.from(xdr, "base64").length);
+  } catch {
+    // ignore — never block the request for a metrics failure
+  }
 
   try {
     const result = await simulateTransaction(xdr, net, res.locals.abortSignal);
