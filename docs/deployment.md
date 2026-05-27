@@ -294,6 +294,9 @@ TESTNET_SECRET_KEY=<your_testnet_secret_key>
 MAINNET_SECRET_KEY=<your_mainnet_secret_key>
 LOG_LEVEL=info
 SIMULATE_TIMEOUT_MS=30000
+# Use TLS for Redis in production when available.
+# For a managed Redis instance, use a rediss:// URL.
+# REDIS_URL=rediss://redis:6379
 ```
 
 #### 6. Create the logs directory
