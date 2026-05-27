@@ -311,6 +311,8 @@ mkdir -p logs
 pm2 start ecosystem.config.js --env production
 ```
 
+> The `ecosystem.config.js` file is configured with `instances: "max"` and `exec_mode: "cluster"` so PM2 will distribute worker processes across available CPU cores. The application also handles `SIGTERM`/`SIGINT` gracefully, which allows clustered workers to shut down cleanly.
+
 #### 8. Save PM2 process list and enable startup on reboot
 
 ```bash
