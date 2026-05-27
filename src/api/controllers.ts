@@ -2,7 +2,7 @@ import { Network } from "@config/stellar";
 import metrics from "@middleware/metrics";
 import { getCache } from "@services/cache";
 import { decodeXdr, type XdrType } from "@services/decoder";
-import { estimateFee } from "@services/feeEstimator";
+import { estimateFee, estimateFeeDetailed } from "@services/feeEstimator";
 import { getNetworkStatus } from "@services/networkStatus";
 import { buildRestoreTransaction } from "@services/restorer";
 import { simulateTransaction } from "@services/simulator";
@@ -444,4 +444,56 @@ export function decode(req: Request, res: Response, next: NextFunction): void {
   }
 
   res.status(HTTP_STATUS.OK).json(result);
+}
+
+export async function costBreakdownController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const { cpuInsns, memBytes, network } = req.query as {
+    cpuInsns?: string;
+    memBytes?: string;
+    network?: string;
+  };
+
+  if (!cpuInsns || !memBytes) {
+    return next(
+      new AppError(
+        "Missing required query parameters: cpuInsns and memBytes",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+
+  if (!/^\d+$/.test(cpuInsns) || !/^\d+$/.test(memBytes)) {
+    return next(
+      new AppError(
+        "cpuInsns and memBytes must be non-negative integer strings",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
+  }
+
+  if (
+    network &&
+    network !== NETWORKS.MAINNET &&
+    network !== NETWORKS.TESTNET &&
+    network !== NETWORKS.FUTURENET
+  ) {
+    return next(
+      new AppError(ERROR_MESSAGES.INVALID_NETWORK, HTTP_STATUS.BAD_REQUEST),
+    );
+  }
+
+  const net: Network = (network as Network) || DEFAULT_NETWORK;
+
+  try {
+    const result = await estimateFeeDetailed(cpuInsns, memBytes, net);
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : ERROR_MESSAGES.UNEXPECTED_ERROR;
+    next(new AppError(message, HTTP_STATUS.INTERNAL_SERVER_ERROR));
+  }
 }

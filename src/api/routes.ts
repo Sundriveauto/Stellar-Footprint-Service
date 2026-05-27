@@ -13,6 +13,7 @@ import {
   restore,
   invalidateCache,
   estimateFeeController,
+  costBreakdownController,
 } from "./controllers";
 import { simulateRateLimiter } from "../middleware/rateLimiter";
 
@@ -32,6 +33,9 @@ router.post("/simulate", simulateRateLimiter, simulate);
 
 // POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
 router.post("/simulate/batch", simulateBatch);
+
+// GET /simulate/cost-breakdown — accepts ?cpuInsns=&memBytes=&network= and returns detailed cost breakdown
+router.get("/simulate/cost-breakdown", costBreakdownController);
 
 // POST /simulate/batch — accepts { transactions: [{ xdr }], network } and returns array of results
 router.post("/simulate/batch", simulateBatch);
