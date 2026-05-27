@@ -293,7 +293,13 @@ export interface SimulateResult {
   error?: string;
   raw?: StellarSdk.SorobanRpc.Api.SimulateTransactionResponse;
 }
-
+/**
+ * Simulates a Stellar transaction and returns footprint data.
+ * 
+ * @param xdr - Base64 encoded transaction XDR
+ * @param network - Stellar network type
+ * @returns Simulation result containing footprint and cost
+ */
 export async function simulateTransaction(
   xdr: string,
   network: Network = "testnet",

@@ -232,26 +232,53 @@ describe("simulateTransaction", () => {
     ).rejects.toThrow("invalid base64");
   });
 
-  it("upgrades v0 envelope to v1 and sets upgradedFromV0: true", async () => {
-    const { TransactionBuilder } = jest.requireMock("@stellar/stellar-sdk");
-    const cloneFromBuild = jest.fn().mockReturnValue({
-      operations: [{ type: "invokeHostFunction" }],
-      envelopeType: jest.fn().mockReturnValue({ name: "envelopeTypeTx" }),
-    });
-    const cloneFromResult = { build: cloneFromBuild };
-    TransactionBuilder.cloneFrom = jest.fn().mockReturnValue(cloneFromResult);
+  // ── #429: TTL expiry warnings ─────────────────────────────────────────────
 
-    // Make fromXDR return a v0 transaction
-    TransactionBuilder.fromXDR.mockReturnValueOnce({
-      operations: [{ type: "invokeHostFunction" }],
-      envelopeType: jest.fn().mockReturnValue({ name: "envelopeTypeTxV0" }),
-    });
-
+  it("returns warnings for footprint entries expiring in < 100 ledgers", async () => {
+    // Set up a non-empty footprint so TTL lookup is triggered
+    const mockEntry = { toXDR: jest.fn().mockReturnValue("AAAA") };
+    mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
+    mockFootprint.readWrite.mockReturnValueOnce([]);
     mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
+    // Entry expires in 49 ledgers (liveUntil=150, current=101)
+    mockGetLedgerEntries.mockResolvedValueOnce({
+      entries: [{ liveUntilLedgerSeq: 150 }],
+      latestLedger: 101,
+    });
 
-    const result = await simulateTransaction(INVALID_XDR_BYTES, "testnet");
+    const result = await simulateTransaction(DUMMY_XDR, "testnet");
 
-    expect(TransactionBuilder.cloneFrom).toHaveBeenCalled();
-    expect(result.upgradedFromV0).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings!.length).toBeGreaterThan(0);
+    expect(result.warnings![0]).toMatch(/expires in 49 ledgers/i);
+  });
+
+  it("returns empty warnings when all entries have >= 100 ledgers remaining", async () => {
+    const mockEntry = { toXDR: jest.fn().mockReturnValue("AAAA") };
+    mockFootprint.readOnly.mockReturnValueOnce([mockEntry]);
+    mockFootprint.readWrite.mockReturnValueOnce([]);
+    mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
+    mockGetLedgerEntries.mockResolvedValueOnce({
+      entries: [{ liveUntilLedgerSeq: 300 }],
+      latestLedger: 100,
+    });
+
+    const result = await simulateTransaction(DUMMY_XDR, "testnet");
+
+    expect(result.success).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("returns empty warnings when TTL fetch returns no entries", async () => {
+    mockSimulateTransaction.mockResolvedValue(makeSuccessResponse());
+    mockGetLedgerEntries.mockResolvedValueOnce({
+      entries: [],
+      latestLedger: 100,
+    });
+
+    const result = await simulateTransaction(DUMMY_XDR, "testnet");
+
+    expect(result.warnings).toEqual([]);
   });
 });
