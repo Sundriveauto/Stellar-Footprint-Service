@@ -327,6 +327,7 @@ async function _processSimulationResult(
 
   return {
     success: true,
+    simulatedAt: new Date().toISOString(),
     footprint: {
       readOnly: optimizationResult.readOnly,
       readWrite: optimizationResult.readWrite,

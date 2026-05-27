@@ -70,6 +70,15 @@ const activeSimulations = new client.Gauge({
   registers: [register],
 });
 
+// Footprint entry count histogram (#423)
+const footprintEntriesHistogram = new client.Histogram({
+  name: "simulate_footprint_entries",
+  help: "Number of footprint entries per simulation",
+  labelNames: ["type"],
+  buckets: [0, 1, 2, 5, 10, 20, 50, 100],
+  registers: [register],
+});
+
 // Middleware to track HTTP metrics
 export function metricsMiddleware(
   req: Request,
