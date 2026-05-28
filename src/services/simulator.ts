@@ -149,7 +149,18 @@ async function fetchTtlInfo(
 }
 
 /**
- * Calculate footprint size statistics
+ * Build warnings for footprint entries expiring within 100 ledgers
+ */
+function buildTtlWarnings(ttl: Record<string, TtlInfo>): string[] {
+  return Object.entries(ttl)
+    .filter(([, info]) => info.expiresInLedgers < 100)
+    .map(
+      ([xdr, info]) =>
+        `Footprint entry ${xdr.slice(0, 16)}… expires in ${info.expiresInLedgers} ledgers; restoration may be required soon.`,
+    );
+}
+
+/**
  */
 function calculateFootprintStats(
   readOnly: string[],
@@ -242,6 +253,7 @@ function _extractEvents(
  */
 export interface SimulateResult {
   success: boolean;
+  upgradedFromV0?: boolean;
   footprint?: {
     readOnly: FootprintEntry[];
     readWrite: FootprintEntry[];
@@ -273,6 +285,7 @@ export interface SimulateResult {
   diagnosticEvents?: string[];
   cacheHit?: boolean;
   type?: string;
+  warnings?: string[];
 }
 
 /**
@@ -318,6 +331,7 @@ async function _processSimulationResult(
 
   return {
     success: true,
+    simulatedAt: new Date().toISOString(),
     footprint: {
       readOnly: optimizationResult.readOnly,
       readWrite: optimizationResult.readWrite,
@@ -353,12 +367,26 @@ export async function simulateTransaction(
   let networkPassphrase: string;
   let tx: StellarSdk.Transaction | StellarSdk.FeeBumpTransaction;
 
+  let upgradedFromV0 = false;
+
   try {
     ({ networkPassphrase } = getNetworkConfig(network));
     server = getRpcServer(network);
     tx = StellarSdk.TransactionBuilder.fromXDR(xdr, networkPassphrase);
   } catch (err) {
     throw err;
+  }
+
+  // Upgrade v0 envelopes to v1 before simulation
+  if (
+    !(tx instanceof StellarSdk.FeeBumpTransaction) &&
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (tx as any).envelopeType?.().name === "envelopeTypeTxV0"
+  ) {
+    tx = StellarSdk.TransactionBuilder.cloneFrom(
+      tx as StellarSdk.Transaction,
+    ).build();
+    upgradedFromV0 = true;
   }
 
   if (tx instanceof StellarSdk.FeeBumpTransaction) {
@@ -444,8 +472,16 @@ export async function simulateTransaction(
     };
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const responseCost = (response as any).cost;
+  const diagnosticEvents =
+    response.events
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ?.filter((e) => (e as any).type?.()?.name === "diagnostic")
+      .map((e) => e.toXDR("base64")) || [];
+
   if (results.length === 1) {
-    // Single operation
+    // Single operation — delegate to shared helper
     const result = results[0];
     if (!result.transactionData) {
       return {
@@ -456,41 +492,12 @@ export async function simulateTransaction(
       };
     }
 
-    const footprint = result.transactionData.build().resources().footprint();
-    const rawFootprint = {
-      readOnly: footprint.readOnly().map((e) => e.toXDR("base64")),
-      readWrite: footprint.readWrite().map((e) => e.toXDR("base64")),
-    };
-
-    // Parse footprint entries to extract contract IDs and classify types
-    const parsedFootprint = parseFootprint(rawFootprint);
-
-    // Extract all contracts touched by the transaction
-    const allEntries = [...rawFootprint.readOnly, ...rawFootprint.readWrite];
-    const contracts = extractContracts(allEntries);
-
-    // Optimize footprint by removing redundant read-only entries
-    const optimizationResult = optimizeFootprint(
-      parsedFootprint.readOnly,
-      parsedFootprint.readWrite,
+    const processed = await _processSimulationResult(
+      server,
+      network,
+      result.transactionData.build(),
+      responseCost,
     );
-
-    // Get all XDR strings for TTL lookup (use original footprint)
-    const allXdrEntries = [...rawFootprint.readOnly, ...rawFootprint.readWrite];
-
-    // Fetch TTL information
-    const ttl = await fetchTtlInfo(server, allXdrEntries, network);
-
-    // Extract required signers from auth entries
-    const builtTxData = result.transactionData?.build() as unknown as { auth?: () => StellarSdk.xdr.SorobanAuthorizationEntry[] };
-    const auth = builtTxData?.auth?.() ?? [];
-    const { requiredSigners, threshold } = extractRequiredSigners(auth);
-
-    // Detect SEP-41 token contract type for the first invoked contract
-    const contractType =
-      contracts.length > 0
-        ? await detectTokenContract(contracts[0], server)
-        : "unknown";
 
     return {
       success: true,
@@ -507,16 +514,18 @@ export async function simulateTransaction(
         cpuInsns: response.cost?.cpuInsns ?? "0",
         memBytes: response.cost?.memBytes ?? "0",
       },
+      warnings: buildTtlWarnings(ttl),
       requiredSigners,
       threshold,
       raw: response,
+      upgradedFromV0: upgradedFromV0 || undefined,
       diagnosticEvents:
         response.events
           ?.filter((e) => (e as unknown as { type?: () => { name?: string } }).type?.()?.name === "diagnostic")
           .map((e) => e.toXDR("base64")) || [],
     };
   } else {
-    // Multi operation
+    // Multi operation — call helper per result and merge
     const operations: SimulateResult[] = [];
     let allReadOnly: FootprintEntry[] = [];
     let allReadWrite: FootprintEntry[] = [];
@@ -526,6 +535,8 @@ export async function simulateTransaction(
     let optimized = false;
     let allRawReadOnly: string[] = [];
     let allRawReadWrite: string[] = [];
+    let totalCpuInsns = BigInt(0);
+    let totalMemBytes = BigInt(0);
 
     for (const result of results) {
       if (!result.transactionData) {
@@ -537,20 +548,10 @@ export async function simulateTransaction(
         };
       }
 
-      const footprint = result.transactionData.build().resources().footprint();
-      const rawFootprint = {
-        readOnly: footprint.readOnly().map((e) => e.toXDR("base64")),
-        readWrite: footprint.readWrite().map((e) => e.toXDR("base64")),
-      };
-
-      const parsedFootprint = parseFootprint(rawFootprint);
-
-      const allEntries = [...rawFootprint.readOnly, ...rawFootprint.readWrite];
-      const contracts = extractContracts(allEntries);
-
-      const optimizationResult = optimizeFootprint(
-        parsedFootprint.readOnly,
-        parsedFootprint.readWrite,
+      const processed = await _processSimulationResult(
+        server,
+        network,
+        result.transactionData.build(),
       );
 
       const allXdrEntries = [
@@ -571,6 +572,13 @@ export async function simulateTransaction(
 
       if (contractType === "unknown") contractType = opContractType;
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const opCpuInsns = (result as any).cost?.cpuInsns ?? "0";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const opMemBytes = (result as any).cost?.memBytes ?? "0";
+      totalCpuInsns += BigInt(opCpuInsns);
+      totalMemBytes += BigInt(opMemBytes);
+
       const opResult: SimulateResult = {
         success: true,
         footprint: {
@@ -583,22 +591,35 @@ export async function simulateTransaction(
         optimized: optimizationResult.optimized,
         rawFootprint,
         cost: {
-          cpuInsns: "0",
-          memBytes: "0",
+          cpuInsns: opCpuInsns,
+          memBytes: opMemBytes,
         },
+        warnings: buildTtlWarnings(ttl),
         requiredSigners,
         threshold,
       };
 
       operations.push(opResult);
 
-      allReadOnly = [...allReadOnly, ...optimizationResult.readOnly];
-      allReadWrite = [...allReadWrite, ...optimizationResult.readWrite];
-      allContracts = [...allContracts, ...contracts];
-      Object.assign(allTtl, ttl);
-      if (optimizationResult.optimized) optimized = true;
-      allRawReadOnly = [...allRawReadOnly, ...rawFootprint.readOnly];
-      allRawReadWrite = [...allRawReadWrite, ...rawFootprint.readWrite];
+      allReadOnly = [...allReadOnly, ...(processed.footprint?.readOnly ?? [])];
+      allReadWrite = [
+        ...allReadWrite,
+        ...(processed.footprint?.readWrite ?? []),
+      ];
+      allContracts = [...allContracts, ...(processed.contracts ?? [])];
+      Object.assign(allTtl, processed.ttl ?? {});
+      if (processed.optimized) optimized = true;
+      if (contractType === "unknown" && processed.contractType !== "unknown") {
+        contractType = processed.contractType as ContractType;
+      }
+      allRawReadOnly = [
+        ...allRawReadOnly,
+        ...(processed.rawFootprint?.readOnly ?? []),
+      ];
+      allRawReadWrite = [
+        ...allRawReadWrite,
+        ...(processed.rawFootprint?.readWrite ?? []),
+      ];
     }
 
     // Dedup
@@ -610,17 +631,11 @@ export async function simulateTransaction(
       (item, index, arr) =>
         arr.findIndex((i) => i.xdr === item.xdr) === index,
     );
-    const dedupContracts = [...new Set(allContracts)];
-    const dedupRawReadOnly = [...new Set(allRawReadOnly)];
-    const dedupRawReadWrite = [...new Set(allRawReadWrite)];
 
     return {
       success: true,
-      footprint: {
-        readOnly: dedupReadOnly,
-        readWrite: dedupReadWrite,
-      },
-      contracts: dedupContracts,
+      footprint: { readOnly: dedupReadOnly, readWrite: dedupReadWrite },
+      contracts: [...new Set(allContracts)],
       contractType,
       ttl: allTtl,
       optimized,
@@ -629,15 +644,13 @@ export async function simulateTransaction(
         readWrite: dedupRawReadWrite,
       },
       cost: {
-        cpuInsns: "0",
-        memBytes: "0",
+        cpuInsns: totalCpuInsns.toString(),
+        memBytes: totalMemBytes.toString(),
       },
+      warnings: buildTtlWarnings(allTtl),
       operations,
       raw: response,
-      diagnosticEvents:
-        response.events
-          ?.filter((e) => (e as unknown as { type?: () => { name?: string } }).type?.()?.name === "diagnostic")
-          .map((e) => e.toXDR("base64")) || [],
+      diagnosticEvents,
     };
   }
 }
