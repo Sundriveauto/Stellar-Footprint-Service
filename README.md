@@ -511,6 +511,13 @@ npm start
 
 The service will start on `http://localhost:3000` (or your configured `PORT`).
 
+### Clean Build Artifacts
+
+```bash
+npm run clean          # Remove dist/ and coverage/
+npm run build:clean    # Clean then rebuild from source
+```
+
 ---
 
 ## 📡 API Reference
